@@ -1,12 +1,9 @@
 # solver.py
 
-from json import dumps
 import clingo
 import argparse
 import math
 from typing import List, Tuple, Set, Optional, Dict
-import datetime
-import time
 
 from sokoban_map import SokobanMap
 
@@ -16,16 +13,23 @@ class SokobanSolver:
     A solver for Sokoban puzzles using the Clingo ASP solver.
     """
 
-    def __init__(self, domain_asp_file: str, max_steps: int = 50):
+    def __init__(
+        self,
+        domain_asp_file: str,
+        max_steps: int = 50,
+        optimize: bool = True,
+    ):
         """
         Initializes the SokobanSolver.
 
         Args:
             domain_asp_file: Path to the ASP domain rules file.
             max_steps: Maximum number of steps to search for a solution.
+            optimize: Whether to prove that the returned plan uses the fewest actions.
         """
         self.domain_asp_file = domain_asp_file
         self.max_steps = max_steps
+        self.optimize = optimize
 
     @staticmethod
     def cell_index(row: int, col: int) -> str:
@@ -43,7 +47,7 @@ class SokobanSolver:
         Returns:
             A string containing ASP facts derived from the map.
         """
-        lines = [line.strip() for line in map_str.splitlines() if line.strip()]
+        lines = [line for line in map_str.splitlines() if line.strip()]
         height = len(lines)
         width = max(len(row) for row in lines) if lines else 0
 
@@ -69,7 +73,7 @@ class SokobanSolver:
                     goal_positions.add(pos)
 
         facts = ["sokoban(sokoban)."]
-        for i, _ in enumerate(crate_positions, start=1):
+        for i, _ in enumerate(sorted(crate_positions), start=1):
             facts.append(f"crate(crate_{i:02d}).")
 
         location_list, goal_list, non_goal_list, walls_list = self._categorize_cells(
@@ -98,14 +102,15 @@ class SokobanSolver:
             row_length = len(lines[r])
             for c in range(row_length):
                 cell_id = f"l{self.cell_index(r, c)}"
-                location_list.append(cell_id)
                 pos = (r, c)
-                if pos in goal_positions:
-                    goal_list.append(cell_id)
-                elif pos not in walls:
-                    non_goal_list.append(cell_id)
                 if pos in walls:
                     walls_list.append(cell_id)
+                    continue
+                location_list.append(cell_id)
+                if pos in goal_positions:
+                    goal_list.append(cell_id)
+                else:
+                    non_goal_list.append(cell_id)
         assert not set(goal_list) & set(non_goal_list), "Conflict: Cells in both isgoal and isnongoal"
         return location_list, goal_list, non_goal_list, walls_list
 
@@ -158,7 +163,7 @@ class SokobanSolver:
             sokoban_id = self.cell_index(*sokoban_pos)
             initial_positions.append(f"at(sokoban, l{sokoban_id}, 0).")
 
-        for i, (r, c) in enumerate(crate_positions, start=1):
+        for i, (r, c) in enumerate(sorted(crate_positions), start=1):
             crate_name = f"crate_{i:02d}"
             crate_id = self.cell_index(r, c)
             initial_positions.append(f"at({crate_name}, l{crate_id}, 0).")
@@ -183,55 +188,28 @@ class SokobanSolver:
         Returns:
             A formatted string with the solution steps or "No solution found".
         """
-        solution_found = False
-        solution_steps: List[str] = []
-        min_steps = 1
-        start_time = datetime.datetime.now().time().strftime('%H:%M:%S')
         instance_facts = self.generate_facts_from_map(map_str)
-        end_time = datetime.datetime.now().time().strftime('%H:%M:%S')
-        total_time = (datetime.datetime.strptime(end_time, '%H:%M:%S') - datetime.datetime.strptime(start_time, '%H:%M:%S'))
-        print(f"\nfact generation took: {total_time}")
+        solution_steps: Optional[List[str]] = None
+        solve_arguments = (
+            ["--models=0", "--opt-mode=opt"]
+            if self.optimize
+            else ["--models=1", "--opt-mode=ignore"]
+        )
+        solve_arguments.extend(["--const", f"maxsteps={self.max_steps}"])
+        ctl = clingo.Control(arguments=solve_arguments)
+        ctl.load(self.domain_asp_file)
+        ctl.add("base", [], instance_facts)
+        ctl.ground([("base", [])])
 
-        print(f"Generating plans of length: ", end='')
+        def handle_model(model: clingo.Model) -> None:
+            nonlocal solution_steps
+            atoms = [str(atom) for atom in model.symbols(shown=True)]
+            solution_steps = [atom for atom in atoms if atom.startswith("do(")]
 
-        for steps in range(min_steps, self.max_steps + 1):
-            print(f"{steps}...", end='')
-            try:
-                # Find optimal plan
-                maxsteps_string = f"maxsteps={steps}"
-                ctl = clingo.Control(arguments=["--models=0", "--opt-mode=opt", '--stats', '--const', maxsteps_string])
-                ctl.load(self.domain_asp_file)
-                ctl.add("base", [], instance_facts)
-                start_time = datetime.datetime.now().time().strftime('%H:%M:%S')
-                ctl.ground([("base", [])])
-                end_time = datetime.datetime.now().time().strftime('%H:%M:%S')
-                total_time = (datetime.datetime.strptime(end_time, '%H:%M:%S') - datetime.datetime.strptime(start_time, '%H:%M:%S'))
-                #print(f"\ngrounding took: {total_time}")
-
-                def handle_model(model: clingo.Model):
-                    nonlocal solution_found, solution_steps
-                    solution_found = True
-                    print(f"\nFound solution: {model}")
-
-                    atoms = [str(atom) for atom in model.symbols(shown=True)]
-                    moves = [atom for atom in atoms if atom.startswith("do(")]
-                    solution_steps.extend(moves)
-
-                ctl.solve(on_model=handle_model, on_statistics=print(dumps(
-                    ctl.statistics['summary']['times'],
-                        sort_keys=True,
-                        indent=4,
-                        separators=(',', ': '))), on_core=print, on_finish=print)
-
-                if solution_found:
-                    return self._format_solution(solution_steps)
-                else:
-                    ctl.cleanup()
-                    print(f"UNSAT, trying with ", end='')
-            except Exception as e:
-                print(f"Error at steps={steps}: {str(e)}")
-
-        return "No solution found"
+        result = ctl.solve(on_model=handle_model)
+        if result.satisfiable and solution_steps is not None:
+            return self._format_solution(solution_steps)
+        return f"No solution found within {self.max_steps} steps"
 
     def _format_solution(self, steps: List[str]) -> str:
         """
@@ -261,7 +239,7 @@ class SokobanSolver:
             for t in sorted(step_to_action.keys()):
                 result_lines.append(f"Step {t}: do({step_to_action[t]}, {t})")
             return "\n".join(result_lines)
-        return "Solution found (no actions shown?)."
+        return "Solution found in 0 steps."
 
     @staticmethod
     def _estimate_min_steps(map_str: str) -> int:
@@ -274,7 +252,7 @@ class SokobanSolver:
         Returns:
             An estimated minimum number of steps.
         """
-        lines = [line.strip() for line in map_str.splitlines() if line.strip()]
+        lines = [line for line in map_str.splitlines() if line.strip()]
         height = len(lines)
         width = max(len(row) for row in lines) if lines else 0
         return math.ceil(math.sqrt(height**2 + width**2))

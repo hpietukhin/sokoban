@@ -1,18 +1,19 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% 4) GOAL: BOX IN L2 (AT LEAST AT ONE MOMENT IN TIME)
+%% 4) GOAL: ALL CRATES ON GOALS AT THE SAME TIME
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 :- isgoal(L), isnongoal(L).
 :- isgoal(L), wall(L).
 :- clear(L,T), time(T), wall(L).
 
-% reachedGoal(C) — indicates that crate C
-% was in cell L, marked as isgoal(L), at some moment T.
-reachedGoal(C) :- crate(C), at(C,L,T), isgoal(L), time(T).
+crate_on_goal(C,T) :- crate(C), at(C,L,T), isgoal(L), time(T).
 
-% Require that for EACH crate, reachedGoal(C) is provable.
-% If at least one crate is found for which reachedGoal(C) does not hold,
-% the program becomes consistent only by violating this rule, which is not allowed.
-:- crate(C), not reachedGoal(C).
+goal_achieved(T) :-
+    time(T),
+    total_crates(N),
+    N = #count { C : crate_on_goal(C,T) }.
+
+% A plan is valid only when every crate is on a goal in the final state.
+:- not goal_achieved(maxsteps).
 
 % If the Sokoban S is in two different locations L1 and L2
 % at the same moment T, this is forbidden.
@@ -74,10 +75,6 @@ deadlock(L) :-
 % I will show Method A to be closer to the classical notation:
     
 0 { do(M,T) : move(M) } 1 :- time(T), T < maxsteps.
-
-goal_achieved(T) :- 
-    time(T),
-    #count { C : crate(C), not reachedGoal(C) } 0.
 
 % Constraint: Sokoban cannot remain on the same cell in two consecutive steps
 :- at(sokoban, L, T), at(sokoban, L, T+1), T < maxsteps, not goal_achieved(T).
@@ -146,13 +143,15 @@ move(pushDown(S,X,Y,Z,C)) :-
 at(O,L,T+1) :-
   at(O,L,T),
   not -at(O,L,T+1),
-  time(T).
+  time(T),
+  T < maxsteps.
 
 % Similarly for clear(L,T)
 clear(L,T+1) :-
   clear(L,T),
   not -clear(L,T+1),
-  time(T).
+  time(T),
+  T < maxsteps.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% 8) PRECONDITIONS (CONSTRAINTS)

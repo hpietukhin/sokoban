@@ -70,6 +70,10 @@ class SokobanMap:
         """
         return '\n'.join(''.join(row) for row in self.map_grid)
 
+    def is_solved(self) -> bool:
+        """Return whether every crate is currently on a goal."""
+        return all(self.SYMBOL_CRATE not in row for row in self.map_grid)
+
     def get_map_steps(self, steps: List[str]) -> List[str]:
         """
         Applies a list of steps to the map and returns the map state after each step.
@@ -111,35 +115,24 @@ class SokobanMap:
         Args:
             step: Push action literal, e.g., do(pushRight(sokoban,l1_4,l1_5,l1_6,crate_01), 3).
         """
-        try:
-            # Extract content inside do(pushRight(...), step_num)
-            inside = step[step.find('(')+1 : step.rfind(')')]  # 'pushRight(sokoban,l1_4,l1_5,l1_6,crate_01), 3'
+        inside = step[step.find('(')+1 : step.rfind(')')]
+        action_str, _ = self._split_step_arguments(inside, expected=2)
 
-            # Split into action and step number
-            action_str, step_num_str = self._split_step_arguments(inside, expected=2)
+        action_name_start = action_str.find('(')
+        if action_name_start == -1:
+            raise ValueError(f"Incorrect action format: {action_str}")
+        action_inside = action_str[action_name_start + 1 : -1]
+        _, from_l, to_l, crate_to, _ = self._split_step_arguments(
+            action_inside, expected=5
+        )
 
-            # Parse action string, e.g., 'pushRight(sokoban,l1_4,l1_5,l1_6,crate_01)'
-            action_name_start = action_str.find('(')
-            if action_name_start == -1:
-                raise ValueError(f"Incorrect action format: {action_str}")
-            action_name = action_str[:action_name_start]
-            action_inside = action_str[action_name_start + 1 : -1]  # 'sokoban,l1_4,l1_5,l1_6,crate_01'
+        crate_r, crate_c = self._cell_id_to_coords(to_l)
+        crate_to_r, crate_to_c = self._cell_id_to_coords(crate_to)
+        self._move_crate(crate_r, crate_c, crate_to_r, crate_to_c)
 
-            # Split action arguments, expecting 5 arguments
-            args = self._split_step_arguments(action_inside, expected=5)
-            #print(f"args: {args}")
-            entity, from_l, to_l, crate_to, crate_name = args
-
-            from_r, from_c = self._cell_id_to_coords(to_l)
-            to_r, to_c = self._cell_id_to_coords(crate_to)
-            self._move_crate(from_r, from_c, to_r, to_c)
-            # Move Sokoban from from_l to to_l
-            from_r, from_c = self._cell_id_to_coords(from_l)
-            to_r, to_c = self._cell_id_to_coords(to_l)
-            self._move_sokoban(from_r, from_c, to_r, to_c)
-
-        except Exception as e:
-            print(f"Error processing push step '{step}': {e}")
+        from_r, from_c = self._cell_id_to_coords(from_l)
+        to_r, to_c = self._cell_id_to_coords(to_l)
+        self._move_sokoban(from_r, from_c, to_r, to_c)
 
     def _apply_move(self, step: str) -> None:
         """
@@ -148,33 +141,20 @@ class SokobanMap:
         Args:
             step: Move action literal (e.g., do(move(...), step_num), do(moveRight(...), step_num)).
         """
-        try:
-            # Extract content inside do(moveRight(sokoban,l1_2,l1_3), 1)
-            start = step.find('(') + 1
-            end = step.rfind(')')
-            inside = step[start:end]  # 'moveRight(sokoban,l1_2,l1_3), 1'
+        start = step.find('(') + 1
+        end = step.rfind(')')
+        inside = step[start:end]
+        action_str, _ = self._split_step_arguments(inside, expected=2)
 
-            # Split into action and step number
-            action_str, step_num_str = self._split_step_arguments(inside, expected=2)
+        action_name_start = action_str.find('(')
+        if action_name_start == -1:
+            raise ValueError(f"Incorrect action format: {action_str}")
+        action_inside = action_str[action_name_start + 1:-1]
+        _, from_l, to_l = self._split_step_arguments(action_inside, expected=3)
 
-            # Now parse action string, e.g., 'moveRight(sokoban,l1_2,l1_3)'
-            action_name_start = action_str.find('(')
-            if action_name_start == -1:
-                raise ValueError(f"Incorrect action format: {action_str}")
-            action_name = action_str[:action_name_start]
-            action_inside = action_str[action_name_start + 1:-1]  # 'sokoban,l1_2,l1_3'
-
-            # Split action arguments
-            action_parts = self._split_step_arguments(action_inside, expected=3)
-            entity, from_l, to_l = action_parts
-
-            from_r, from_c = self._cell_id_to_coords(from_l)
-            to_r, to_c = self._cell_id_to_coords(to_l)
-
-            # Move the entity
-            self._move_sokoban(from_r, from_c, to_r, to_c)
-        except Exception as e:
-            print(f"Error processing move step '{step}': {e}")
+        from_r, from_c = self._cell_id_to_coords(from_l)
+        to_r, to_c = self._cell_id_to_coords(to_l)
+        self._move_sokoban(from_r, from_c, to_r, to_c)
 
     def _move_sokoban(self, from_r: int, from_c: int, to_r: int, to_c: int) -> None:
         """
@@ -187,9 +167,6 @@ class SokobanMap:
             to_c: Target column.
         """
         current_symbol = self.map_grid[from_r][from_c]
-        #print(f"current symbol: '{current_symbol}'")
-        print(f"current location: {(from_r, from_c)}")
-        
         if current_symbol not in (self.SYMBOL_SOKOBAN, self.SYMBOL_SOKOBAN_GOAL):
             raise ValueError(f"There is no Sokoban at position ({from_r}, {from_c}).")
         
@@ -216,9 +193,6 @@ class SokobanMap:
             to_c: Target column.
         """
         current_symbol = self.map_grid[from_r][from_c]
-        #print(f"current symbol: '{current_symbol}'")
-        print(f"current location: {(from_r, from_c)}")
-        assert current_symbol in (self.SYMBOL_CRATE, self.SYMBOL_CRATE_GOAL), f"There is no crate at position ({from_r}, {from_c})."
         if current_symbol not in (self.SYMBOL_CRATE, self.SYMBOL_CRATE_GOAL):
             raise ValueError(f"There is no crate at position ({from_r}, {from_c}).")
         

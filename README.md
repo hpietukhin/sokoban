@@ -205,4 +205,36 @@ pytest test_solver.py --map=map1.txt --tb=short -v -s
 **Options:**
 
 - `--map=<map_file>`: Run tests for a specific map. If omitted, all maps are tested.  
-Note: On basic maps like map #1, #8, #4-#6 my encoding works without problems and finds optimal plan in a fraction of second. But unfortunately maps #2, #3 and #7 run too long for convenient. But in some time my encoding still can find suboptimal solution for that maps.
+Note: On basic maps like map #1, #8, #4-#6 the encoding finds an optimal plan in a fraction of a second. Maps #2, #3 and #7 are the hard ones — they need a larger step horizon and the optimizer spends most of its time proving optimality (e.g. map #2 at 20 steps used to take ~27s just to prove UNSAT).
+
+### Performance: streamliner constraints
+
+Following the *"Streamliners for Answer Set Programming"* approach ([arXiv:2604.19251](https://arxiv.org/abs/2604.19251); [paper code on Zenodo](https://zenodo.org/records/18378760)), the hard maps are sped up by adding **streamliner constraints** — symmetry-breaking / implied constraints that prune the search space without removing any optimal solution.
+
+A gap-free-prefix symmetry break is now built into `sokoban.lp` (actions may only occupy a contiguous prefix `0,1,2,…` of the horizon, so idle steps can only be a suffix):
+
+```prolog
+:- do(_,T), T > 0, not do(_,T-1).
+```
+
+Measured effect (optimal plan length unchanged everywhere):
+
+| map | horizon | base | with streamliner |
+| --- | --- | --- | --- |
+| map7 (SAT) | 32 | 1.86s | **0.60s** (−68%) |
+| map2 (UNSAT proof) | 20 | 27.0s | **17.8s** (−34%) |
+| map1/4/5/6/8 | 20 | fast | faster / equal |
+
+Additional, *instance-dependent* streamliners live in `streamliners/` and can be layered on top of the base encoding (this mirrors the paper's *virtual best encoding*: no single variant is fastest on every instance):
+
+- `contiguous.lp` — the gap-free prefix break (already baked into `sokoban.lp`).
+- `stopatgoal.lp` — `:- do(_,T), goal_achieved(T).` Much faster at *finding* plans on SAT maps (map7: ~0.38s), but *slower* at proving UNSAT, so it is kept optional.
+- `norev.lp` — forbids immediately reversing a sokoban move; measurably hurt UNSAT proving, kept for reference only.
+- `recommended.lp` — `contiguous` + `stopatgoal` combined.
+
+Benchmark any combination with `bench.py`:
+
+```bash
+uv run --with clingo==5.7.1 python bench.py streamliners/stopatgoal.lp \
+    --maps map7.txt,map2.txt --steps 32 --timeout 90
+```

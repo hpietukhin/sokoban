@@ -79,6 +79,12 @@ deadlock(L) :-
 % Constraint: Sokoban cannot remain on the same cell in two consecutive steps
 :- at(sokoban, L, T), at(sokoban, L, T+1), T < maxsteps, not goal_achieved(T).
 
+% Streamliner (symmetry break): actions form a gap-free prefix 0,1,2,...
+% If an action is taken at T>0, one must also be taken at T-1. This
+% canonicalises where idle steps sit in the horizon (they can only be a
+% suffix), pruning symmetric plans without removing any optimal solution.
+:- do(_,T), T > 0, not do(_,T-1).
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% 6) DEFINING "move(M)" (GENERATING ALL POSSIBLE ACTIONS)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
